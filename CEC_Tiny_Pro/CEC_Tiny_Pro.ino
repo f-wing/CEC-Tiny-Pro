@@ -8,13 +8,20 @@
 /* The HDMI address for this device.  Respond to CEC sent to this address. */
 #define ADDRESS 0x05      // Pretend to be a HDMI  Audio Subsystem
 #define CECPIN 11         // Input pin for the CEC signal
-#define OUTPUTTICKS 20000 // This defines the duration of an "output" signal, sich as a LED blink or a motor turn
-#define LEDPIN 13         // Output pin to drive a status LED
-#define ACTIVE 0          // Set to 1 to active;y reply to CEC messages
+#define OUTPUTTICKS 10000 // This defines the duration of an "output" signal, sich as a LED blink or a motor turn
+#define PREAMP_CTRL_PIN 12// output (high --> ENC_SW pressed, low --> ENC_SW not pressed)
+#define ACTIVE 0          // Set to 1 to active; reply to CEC messages
                           // Set to 0 for a passive mode (when another active CEC sink is present)
+#define PREAMP_STATUS_PIN 13 //internal pu to be activated, input (high --> preamp off, low --> preamp on)
 
 char serialline[50];
 bool outputactive;
+
+enum PREAMP_STATUS {
+  PREAMP_ON = 0,
+  PREAMP_OFF = 1
+};
+
 
 void send_ack(void) {
   /* Send ACK.  Called immediately after a falling edge has occured. */
@@ -371,11 +378,13 @@ void report_physical_address(byte initiator, byte destination, unsigned int phys
 
 void setup() {
   pinMode(CECPIN, INPUT);
+  pinMode(PREAMP_STATUS_PIN,INPUT_PULLUP);
+  pinMode(PREAMP_CTRL_PIN, OUTPUT);
 
   TCCR1A = 0;
   TCCR1B = 0;
   TCCR1B |= (1 << CS12);    // 256 prescaler 
-  TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
+  //TIMSK1 |= (1 << TOIE1);   // enable timer overflow interrupt
   
   Serial.begin(500000);
   while (!Serial);
@@ -393,11 +402,11 @@ void setup() {
 
 /* When we turn on an output port, we schedule this overflow
  * interrupt to turn off the port off after OUTPUTTICKS */
-ISR(TIMER1_OVF_vect)
+ISR(TIMER1_OVF_vect) // ISR is never called because interput it not enabled
 {
 //  noInterrupts();
   /* code for turning off outputs after a period of time */
-  digitalWrite(LEDPIN, digitalRead(LEDPIN) ^ 1);
+  digitalWrite(PREAMP_CTRL_PIN, digitalRead(PREAMP_CTRL_PIN) ^ 1);
   if (outputactive) {
     /* plug in your output handling code here, such as stopping a motor */
     outputactive = false;
@@ -433,15 +442,36 @@ void loop() {
     switch (pld[1]) {
       case 0x04:
         Serial.print(F("[Image View On]"));
+        if (destination == 0){ // signal send to TV (address 0)
+          if(digitalRead(PREAMP_STATUS_PIN) == PREAMP_OFF){ 
+              Serial.println(F("[Switch preamp ON]"));
+              digitalWrite(PREAMP_CTRL_PIN, true);
+              delay(1000);
+              digitalWrite(PREAMP_CTRL_PIN, false);
+              Serial.println(F("[Preamp switched ON]"));
+          } else{
+            Serial.println(F("[Preamp already ON]"));
+          }
+        }
         break;       
       case 0x0d:
         Serial.print(F("[Text View On]"));
         break;       
       case 0x36:
-        outputactive = true;
-        TCNT1 = 65536 - OUTPUTTICKS; // preload the overflow timer
+        //outputactive = true; // when Standby is send to TV (address 0), switch output on
+        //TCNT1 = 65536 - OUTPUTTICKS; // preload the overflow timer
         Serial.println(F("[Standby]"));
         Serial.print(F("<*> [Turn the display OFF]"));
+        if (destination == 0){  // signal send to TV (address 0)
+          while(digitalRead(PREAMP_STATUS_PIN) == PREAMP_ON){ //emulate long button press (2s) until preamp switches off, required to exit potential sub menues
+              digitalWrite(PREAMP_CTRL_PIN, true);
+              delay(1500);
+              digitalWrite(PREAMP_CTRL_PIN, false);
+              delay(2000);
+              Serial.println(F("[Long button press send to preamp]"));
+          }
+          Serial.println(F("[Preamp switched OFF]"));
+        } 
         break;
       case 0x70:
         Serial.print(F("[System Audio Mode Request]"));
@@ -462,8 +492,8 @@ void loop() {
         Serial.print(F("[System Audio Mode Status]"));
         break;
       case 0x82:
-        outputactive = true;
-        TCNT1 = 65536 - OUTPUTTICKS; // preload the overflow timer
+ //       outputactive = true;
+ //       TCNT1 = 65536 - OUTPUTTICKS; // preload the overflow timer
         Serial.println(F("[Active Source]"));
         Serial.print(F("<*> [Turn the display ON]"));
         break;
@@ -517,13 +547,13 @@ void loop() {
         break;
       case 0x44:
         if (pld[2] == 0x41) { 
-          outputactive = true;
-          TCNT1 = 65536 - OUTPUTTICKS; // preload the oveflow timer
+ //         outputactive = true;
+ //         TCNT1 = 65536 - OUTPUTTICKS; // preload the oveflow timer
           Serial.print(F("[User Control Volume Up]"));
         }
         else if (pld[2] == 0x42) {
-          outputactive = true;
-          TCNT1 = 65536 - OUTPUTTICKS; // preload the overflow timer
+//          outputactive = true;
+//          TCNT1 = 65536 - OUTPUTTICKS; // preload the overflow timer
           Serial.print(F("[User Control Volume Down]"));
         }
         break;
